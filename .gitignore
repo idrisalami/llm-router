@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Large binary / cached data files
+data/routerbench_0shot.pkl
+data/embeddings_mbpp.npy
+data/embeddings_mbpp_prompts.txt
+
+# Generated plots (large PNGs / HTML)
+output/**/*.png
+output/**/*.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

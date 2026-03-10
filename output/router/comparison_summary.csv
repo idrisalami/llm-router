@@ -1,0 +1,11 @@
+strategy,clf_type,tolerance,accuracy,avg_cost,savings_vs_best_%
+always-best,-,-,0.6859,0.009377,0.0
+always-cheapest,-,-,0.3424,4.9e-05,99.5
+random,-,-,0.5176,0.001999,78.7
+oracle,-,-,0.8659,0.000413,95.6
+LR router tol=0.00,lr,0.0,0.6494,0.003094,67.0
+LR router tol=0.02,lr,0.02,0.5647,0.001566,83.3
+LR router tol=0.05,lr,0.05,0.5529,0.001272,86.4
+GB router tol=0.00,gb,0.0,0.6459,0.004243,54.7
+GB router tol=0.02,gb,0.02,0.6235,0.003002,68.0
+GB router tol=0.05,gb,0.05,0.6,0.002125,77.3
