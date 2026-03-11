@@ -1,18 +1,13 @@
-"""Joint multi-output router: RF and MLP.
+"""Joint multi-output MLP router.
 
-Both models take X=(n_prompts, emb_dim) and predict Y=(n_prompts, 11),
+Takes X=(n_prompts, emb_dim) and predicts Y=(n_prompts, 11),
 where Y[i, j] = P(model_j passes on prompt_i).
 
-At routing time the model with the highest predicted probability is selected
-(same policy as the binary LR baseline, so results are directly comparable).
+At routing time the model with the highest predicted probability is selected,
+with optional score_tolerance to prefer cheaper models when scores are close.
 
-Models
-------
-  rf  : RandomForestRegressor (multi-output, shared trees)
-  mlp : Small PyTorch MLP (shared hidden layers, BCELoss)
-
-Architecture (MLP)
-------------------
+Architecture
+------------
   Linear(emb_dim → 128) → ReLU → Dropout(0.3)
   Linear(128 → 64)      → ReLU → Dropout(0.3)
   Linear(64 → 11)       → Sigmoid   (one probability per model)
@@ -24,11 +19,9 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.ensemble import RandomForestRegressor  # type: ignore
 from sklearn.model_selection import KFold
 
-from .train import MODELS, build_training_matrix
-from .predict import route_embedding as _route_embedding_dict
+from .train import build_training_matrix
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -54,7 +47,7 @@ class RouterMLP(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Training helpers
+# Training
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _train_mlp(
@@ -105,62 +98,22 @@ def _train_mlp(
     return model
 
 
-def _train_rf(
-    X_train: np.ndarray,
-    Y_train: np.ndarray,
-    n_estimators: int = 200,
-    seed: int = 42,
-) -> RandomForestRegressor:
-    rf = RandomForestRegressor(
-        n_estimators=n_estimators,
-        max_depth=8,
-        min_samples_leaf=5,
-        n_jobs=-1,
-        random_state=seed,
-    )
-    rf.fit(X_train, Y_train)
-    return rf
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Unified predict interface → dict[model_name → P(pass)]
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _predict_scores(
-    model,
-    x: np.ndarray,
-    model_names: list[str],
-    model_type: str,
-) -> dict[str, float]:
-    """Return P(pass) dict for one prompt embedding."""
-    if model_type == "mlp":
-        with torch.no_grad():
-            probs = model(torch.tensor(x, dtype=torch.float32).unsqueeze(0))
-            probs = probs.squeeze(0).numpy()
-    else:  # rf
-        probs = model.predict(x.reshape(1, -1))[0]
-        probs = np.clip(probs, 0.0, 1.0)
-
-    return {m: float(p) for m, p in zip(model_names, probs)}
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Cross-validated evaluation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def evaluate_joint_router_cv(
+def evaluate_mlp_router_cv(
     df: pd.DataFrame,
     embeddings: np.ndarray,
     prompts: list[str],
-    model_type: str = "mlp",   # "mlp" or "rf"
     cv: int = 5,
     budget: float | None = None,
     score_tolerance: float = 0.0,
 ) -> pd.DataFrame:
-    """Run k-fold CV for the joint (multi-output) router.
+    """Run k-fold CV for the joint MLP router.
 
     Returns DataFrame with columns:
-      prompt, fold, routed_model, actual_quality, actual_cost
+      prompt, fold, routed_model, actual_quality, actual_cost, chosen_score
     """
     X, y_dict, model_costs, ordered_prompts = build_training_matrix(df, embeddings, prompts)
     model_names = list(y_dict.keys())
@@ -173,16 +126,14 @@ def evaluate_joint_router_cv(
 
     for fold_idx, (train_idx, test_idx) in enumerate(kf.split(X)):
         print(f"  fold {fold_idx + 1}/{cv}…", end="\r")
-
-        if model_type == "mlp":
-            trained = _train_mlp(X[train_idx], Y[train_idx])
-        else:
-            trained = _train_rf(X[train_idx], Y[train_idx])
+        trained = _train_mlp(X[train_idx], Y[train_idx])
 
         for j in test_idx:
-            scores = _predict_scores(trained, X[j], model_names, model_type)
+            with torch.no_grad():
+                probs = trained(torch.tensor(X[j], dtype=torch.float32).unsqueeze(0))
+                probs = probs.squeeze(0).numpy()
+            scores = {m: float(p) for m, p in zip(model_names, probs)}
 
-            # Reuse existing routing policy (budget + tolerance)
             eligible = {
                 m: s for m, s in scores.items()
                 if budget is None or model_costs.get(m, float("inf")) <= budget
