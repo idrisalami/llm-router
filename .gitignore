@@ -2,9 +2,10 @@
 .DS_Store
 
 # Large binary / cached data files
-data/routerbench_0shot.pkl
-data/embeddings_mbpp.npy
-data/embeddings_mbpp_prompts.txt
+data/*.pkl
+data/*.npy
+data/*.parquet
+data/*.txt
 
 # Generated plots (large PNGs / HTML)
 output/**/*.png
