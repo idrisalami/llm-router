@@ -180,6 +180,94 @@ def _run_tolerance_sweep(df, embeddings, prompts, cv: int) -> None:
     results_df.to_csv(out_path, index=False)
     print(f"\n[compare] Results saved → {out_path}")
 
+    _plot_cost_accuracy(results_df, baselines, y_dict, model_costs, OUTPUT_DIR)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Cost-accuracy scatter plot
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _plot_cost_accuracy(
+    results_df,
+    baselines: dict,
+    y_dict: dict,
+    model_costs: dict,
+    output_dir,
+) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    fig, ax = plt.subplots(figsize=(13, 7))
+
+    # ── Individual models (grey, small) ───────────────────────────────────────
+    for model, y in y_dict.items():
+        acc  = float(y.mean())
+        cost = model_costs[model]
+        ax.scatter(cost, acc, color="#CCCCCC", s=60, zorder=2)
+        ax.annotate(model.split("/")[-1], (cost, acc),
+                    textcoords="offset points", xytext=(5, 3),
+                    fontsize=7, color="#999999")
+
+    # ── Baselines ─────────────────────────────────────────────────────────────
+    baseline_styles = {
+        "always-best":     ("#4C72B0", "Always GPT-4"),
+        "always-cheapest": ("#DD8452", "Always cheapest"),
+        "random":          ("#8172B3", "Random"),
+        "oracle":          ("#55A868", "Oracle (ceiling)"),
+    }
+    for name, stats in baselines.items():
+        color, label = baseline_styles[name]
+        ax.scatter(stats["avg_cost"], stats["accuracy"],
+                   color=color, s=160, zorder=4,
+                   edgecolors="black", linewidth=0.8, label=label)
+
+    # ── MLP router across tolerances (connected trade-off curve) ──────────────
+    mlp_rows = results_df[results_df["model"] == "Joint MLP"].copy()
+    mlp_rows = mlp_rows.sort_values("avg_cost")  # left-to-right along cost axis
+
+    tol_colors = plt.cm.plasma(
+        np.linspace(0.15, 0.85, len(mlp_rows))
+    )
+
+    # Draw connecting line first (behind dots)
+    ax.plot(mlp_rows["avg_cost"].values, mlp_rows["accuracy"].values,
+            color="#C44E52", linewidth=1.5, linestyle="--", alpha=0.5, zorder=3)
+
+    for (_, row), color in zip(mlp_rows.iterrows(), tol_colors):
+        tol = row["tolerance"]
+        ax.scatter(row["avg_cost"], row["accuracy"],
+                   color=color, s=220, marker="*", zorder=5,
+                   edgecolors="black", linewidth=0.7)
+        ax.annotate(f"MLP tol={tol:.2f}", (row["avg_cost"], row["accuracy"]),
+                    textcoords="offset points", xytext=(8, 4),
+                    fontsize=8, fontweight="bold", color="#C44E52")
+
+    # Dummy entry for legend
+    ax.scatter([], [], color="#C44E52", s=220, marker="*",
+               edgecolors="black", linewidth=0.7, label="MLP router (↑tol → cheaper)")
+
+    ax.set_xscale("log")
+    ax.set_xlabel("Avg cost per query (USD) — log scale", fontsize=11)
+    ax.set_ylabel("Accuracy (pass@1)", fontsize=11)
+    ax.set_title(
+        "Joint MLP Router — Cost vs Accuracy Trade-off\n"
+        "(each ★ = one tolerance setting; right = expensive/accurate, left = cheap/lower accuracy)",
+        fontsize=11,
+    )
+    ax.set_ylim(0.1, 0.95)
+    ax.legend(fontsize=9, loc="lower right")
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out_path = output_dir / "router_comparison.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[compare] Plot saved → {out_path}")
+
 
 if __name__ == "__main__":
     sys.exit(main())
