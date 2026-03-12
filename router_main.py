@@ -16,6 +16,9 @@ Usage
 
     # Analyse embedding spread (re-run after each representation change)
     python3 router_main.py --analyze-embeddings
+
+    # Compare spread across MiniLM + ZCA / PCA-whiten / code-aug / TF-IDF variants
+    python3 router_main.py --compare-embeddings
 """
 
 import argparse
@@ -45,10 +48,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="Number of cross-validation folds (default: 5).")
     parser.add_argument("--analyze-embeddings", action="store_true",
                         help="Plot embedding spread metrics (re-run after each representation change).")
+    parser.add_argument("--compare-embeddings", action="store_true",
+                        help="Compare spread metrics across MiniLM + all enhancement variants.")
+    parser.add_argument("--compare-routing", action="store_true",
+                        help="Run CV routing evaluation for each embedding variant at tol=0.10.")
 
     args = parser.parse_args(argv)
 
-    if not args.train and not args.route and not args.compare and not args.analyze_embeddings:
+    if not any([args.train, args.route, args.compare, args.analyze_embeddings,
+                args.compare_embeddings, args.compare_routing]):
         parser.print_help()
         print("\n[error] Provide --train, --route, --compare, or --analyze-embeddings.", file=sys.stderr)
         return 1
@@ -86,6 +94,25 @@ def main(argv: list[str] | None = None) -> int:
         metrics = compute_spread_metrics(embeddings)
         print_metrics(metrics, label="MiniLM (all-MiniLM-L6-v2, 384-dim)")
         plot_embedding_spread(embeddings, label="MiniLM", metrics=metrics)
+
+    # ── --compare-embeddings ──────────────────────────────────────────────────
+    if args.compare_embeddings:
+        from analysis.embedding_enhance import build_all_variants
+        from analysis.embedding_analysis import compare_spread, compute_spread_metrics, print_metrics
+
+        print("[embed] Building embedding variants…")
+        variants = build_all_variants(embeddings, prompts)
+
+        print("\n[embed] Spread metrics per variant:")
+        for name, emb in variants:
+            m = compute_spread_metrics(emb)
+            print_metrics(m, label=f"{name}  (dim={emb.shape[1]})")
+
+        compare_spread(variants)
+
+    # ── --compare-routing ─────────────────────────────────────────────────────
+    if args.compare_routing:
+        _run_routing_comparison(df, embeddings, prompts, args.cv, args.tolerance)
 
     # ── --compare ─────────────────────────────────────────────────────────────
     if args.compare:
@@ -304,6 +331,62 @@ def _plot_cost_accuracy(
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     print(f"[compare] Plot saved → {out_path}")
+
+
+def _run_routing_comparison(df, embeddings, prompts, cv: int, tolerance: float) -> None:
+    """CV routing accuracy + cost for each embedding variant at a fixed tolerance."""
+    import pandas as pd
+    from pathlib import Path
+    from analysis.embedding_enhance import build_all_variants
+    from analysis.embedding_analysis import compute_spread_metrics
+    from router.mlp_router import (
+        build_training_matrix, compute_baselines,
+        evaluate_mlp_router_cv, evaluate_prior_router_cv,
+    )
+
+    OUTPUT_DIR = Path("output/router")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Reference baselines (use raw embeddings — model-level stats only)
+    _, y_dict, model_costs, _ = build_training_matrix(df, embeddings, prompts)
+    baselines = compute_baselines(y_dict, model_costs)
+    best_cost = baselines["always-best"]["avg_cost"]
+
+    print(f"\n[compare-routing] Tolerance={tolerance}  CV={cv}")
+    print("=" * 75)
+    print(f"  {'Variant':<28}  {'Accuracy':>8}  {'Avg cost':>12}  {'Savings':>8}  {'cos_sim':>8}  {'eff_dim':>7}")
+    print("=" * 75)
+
+    rows = []
+
+    # Prior baseline (no embedding, prompt-independent)
+    cv_res = evaluate_prior_router_cv(df, embeddings, prompts, cv=cv, score_tolerance=tolerance)
+    acc  = cv_res["actual_quality"].mean()
+    cost = cv_res["actual_cost"].mean()
+    sav  = (1 - cost / best_cost) * 100
+    print(f"  {'Prior (no embedding)':<28}  {acc:>8.4f}  ${cost:>11.6f}  {sav:>7.1f}%  {'—':>8}  {'—':>7}")
+    rows.append({"variant": "Prior (no embedding)", "accuracy": acc, "avg_cost": cost,
+                 "savings_%": sav, "mean_cos_sim": None, "eff_dim_90": None})
+
+    variants = build_all_variants(embeddings, prompts)
+    for name, emb in variants:
+        spread = compute_spread_metrics(emb)
+        cv_res = evaluate_mlp_router_cv(df, emb, prompts, cv=cv, score_tolerance=tolerance)
+        acc    = cv_res["actual_quality"].mean()
+        cost   = cv_res["actual_cost"].mean()
+        sav    = (1 - cost / best_cost) * 100
+        cos    = spread["mean_cos_sim"]
+        edim   = spread["effective_dim_90"]
+        print(f"  {name:<28}  {acc:>8.4f}  ${cost:>11.6f}  {sav:>7.1f}%  {cos:>8.4f}  {edim:>7}")
+        rows.append({"variant": name, "accuracy": acc, "avg_cost": cost,
+                     "savings_%": sav, "mean_cos_sim": cos, "eff_dim_90": edim})
+
+    print("=" * 75)
+
+    results_df = pd.DataFrame(rows)
+    out_path = OUTPUT_DIR / "embedding_routing_comparison.csv"
+    results_df.to_csv(out_path, index=False)
+    print(f"\n[compare-routing] Results saved → {out_path}")
 
 
 if __name__ == "__main__":

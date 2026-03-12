@@ -71,6 +71,23 @@ Comparing Prior vs MLP at the same tolerance reveals the embedding adds very lit
 
 ---
 
+## Embedding spread analysis
+
+`--analyze-embeddings` tracks spread metrics; `--compare-embeddings` compares all variants; `--compare-routing --tolerance 0.10` shows whether better spread translates to better routing.
+
+| Variant | cos sim | eff dim (90%) | mean L2 | Accuracy | Savings |
+|---|---|---|---|---|---|
+| MiniLM (raw) | 0.305 | 85 / 384 | 1.173 | 63.4% | 96.4% |
+| **ZCA-whitened** | **−0.002** | **292 / 384** | **1.416** | **64.5%** | 96.5% |
+| PCA-128 whitened | −0.002 | 108 / 128 | 1.415 | 61.9% | 96.8% |
+| + code features | 0.071 | 16 / 404 | 1.340 | 60.7% | 96.4% |
+| + TF-IDF (SVD-64) | 0.278 | 101 / 448 | 1.197 | 61.2% | 96.9% |
+| Prior (no embed) | — | — | — | 65.2% | 96.4% |
+
+ZCA whitening dramatically increases spread (eff dim 85 → 292, cos sim 0.305 → −0.002) and slightly improves routing accuracy (63.4% → 64.5%), narrowing but not closing the gap with the Prior. The fundamental bottleneck is that MBPP prompts are semantically near-identical — no representation technique can extract difficulty signal that isn't there.
+
+---
+
 ## Setup
 
 ```bash
