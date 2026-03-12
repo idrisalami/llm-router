@@ -68,7 +68,7 @@ All metrics from strict 5-fold cross-validation (no prompt seen in both train an
 The **Prior (no embedding)** baseline uses only each model's average pass rate from the training fold — no neural network, no embeddings. Every test prompt gets the same prompt-independent score; the cheapest model within tolerance wins.
 
 Comparing Prior vs MLP at the same tolerance reveals the embedding adds almost nothing:
-- At `tol=0.05`: both achieve **65.2% accuracy**, but the prior costs $0.000335 vs MLP's $0.003134 — 10× cheaper for identical accuracy
+- At `tol=0.05`: both achieve **65.2% accuracy**, but the prior costs $0.000335$ vs MLP's $0.003134$ — 10× cheaper for identical accuracy
 - At `tol=0.10`: both reach the same cost (~$0.000336), but the prior is actually *more accurate* (65.2% vs 63.4%)
 
 **Root cause:** the MLP is not learning per-prompt difficulty. It is learning the same global pass-rate ranking the prior uses directly. There is no prompt-specific signal for it to learn from.
@@ -95,18 +95,15 @@ ZCA whitening decorrelates all embedding dimensions and equalises their variance
 |---|---|---|---|
 | MiniLM (raw) | 0.305 | 85 / 384 | 63.4% |
 | ZCA-whitened | −0.002 | 292 / 384 | 64.5% |
+| LLM-expanded + ZCA | −0.002 | 293 / 384 | 63.1% |
 | PCA-128 whitened | −0.002 | 108 / 128 | 61.9% |
-| + code features | 0.071 | 16 / 404 | 60.7% |
 | + TF-IDF (SVD-64) | 0.278 | 101 / 448 | 61.2% |
+| + code features | 0.071 | 16 / 404 | 60.7% |
 | **Prior (no embed)** | — | — | **65.2%** |
 
-ZCA whitening is the best pure-geometry improvement — it pushes the eff dim from 85 to 292 and closes the gap with the Prior from −1.8pp to −0.7pp. But it cannot invent signal that is absent: all it does is rearrange the same information more uniformly. The Prior still wins because the bottleneck is *information content*, not geometry.
+### LLM expansion: richer signal, same bottleneck
 
-### The real fix: richer prompt representations via LLM expansion
-
-The fundamental insight is that the terse MBPP prompts do not contain enough surface-level variation for an embedding model to distinguish difficulty. The solution is to **unpack that latent information explicitly** before embedding.
-
-We use a small LLM (Claude Haiku) to expand each prompt into a structured difficulty profile:
+Claude Haiku expands each terse prompt into a structured difficulty profile:
 
 ```
 Concepts:    [Python/CS concepts required]
@@ -116,15 +113,11 @@ Edge cases:  [2–3 specific cases]
 Difficulty:  [easy / medium / hard + one-line reason]
 ```
 
-For example:
-- *"Return the nth Fibonacci number"* → `Concepts: recursion, memoization | Algorithm: DP | Complexity: O(n) | Edge cases: n=0, n=1, negative n | Difficulty: easy`
-- *"Find the longest common subsequence of two strings"* → `Concepts: dynamic programming, 2D DP table | Algorithm: DP | Complexity: O(nm) | Edge cases: empty string, identical strings | Difficulty: hard`
+The original prompt and the expansion are concatenated and re-embedded with MiniLM + ZCA whitening. Expansions are cached to `data/llm_expansions.json` (called once, ~$0.005 total).
 
-These expansions have genuine lexical and semantic variation — easy vs hard, O(n) vs O(n²), recursion vs hashing — that the original terse prompts do not. The MLP can now learn features that actually correlate with which models pass.
+**Result:** The max pairwise cosine similarity drops from 0.99 (raw) to 0.61 — the embeddings are genuinely richer and more discriminative. Effective dimensionality reaches 293, on par with pure ZCA. But routing accuracy (63.1%) does not improve over raw ZCA (64.5%) and remains below the Prior (65.2%).
 
-The original prompt and the expansion are concatenated and re-embedded with MiniLM (+ ZCA whitening), so the embedding carries both the original meaning and the unpacked difficulty signal.
-
-Expansions are cached to `data/llm_expansions.json` so the API is called only once per prompt.
+**Why:** The information is now in the embeddings. The MLP just cannot reliably learn from it at 425 samples with binary pass/fail labels — the signal-to-noise ratio at this dataset size is too low for fine-grained difficulty distinctions. The ~1–2pp differences across all variants are within the variance of 5-fold CV. A larger or more varied dataset (e.g. mixing MBPP with HumanEval and harder benchmarks) would be needed to confirm whether the richer representation converts to real routing gains.
 
 ---
 

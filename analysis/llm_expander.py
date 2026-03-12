@@ -57,38 +57,8 @@ def _call_anthropic(prompt: str) -> str:
     return message.content[0].text.strip()
 
 
-def _call_ollama(prompt: str, model: str = "qwen2.5:3b") -> str:
-    """Fallback: call a local Ollama model."""
-    import urllib.request
-    import json as _json
-
-    payload = _json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": prompt},
-        ],
-        "stream": False,
-        "options": {"num_predict": 150},
-    }).encode()
-
-    req = urllib.request.Request(
-        "http://localhost:11434/api/chat",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = _json.loads(resp.read())
-    return data["message"]["content"].strip()
-
-
 def _call_llm(prompt: str) -> str:
-    """Try Anthropic API first, fall back to Ollama."""
-    import os
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return _call_anthropic(prompt)
-    # No API key — try local Ollama
-    return _call_ollama(prompt)
+    return _call_anthropic(prompt)
 
 
 def load_or_expand(
@@ -107,9 +77,7 @@ def load_or_expand(
     missing = [p for p in prompts if _prompt_key(p) not in cache]
 
     if missing:
-        import os
-        backend = "Claude Haiku" if os.environ.get("ANTHROPIC_API_KEY") else "Ollama (local)"
-        print(f"[expander] Expanding {len(missing)} prompts via {backend}…")
+        print(f"[expander] Expanding {len(missing)} prompts via Claude Haiku…")
         for i, p in enumerate(missing, 1):
             key = _prompt_key(p)
             try:
