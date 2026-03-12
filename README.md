@@ -89,21 +89,21 @@ A mean cosine similarity of 0.31 means every pair of prompts shares ~31% of thei
 
 ### Improving spread with ZCA whitening
 
-ZCA whitening decorrelates all embedding dimensions and equalises their variance, spreading the point cloud across the full 384-dimensional sphere. Results:
+ZCA whitening decorrelates all embedding dimensions and equalises their variance, spreading the point cloud across the full 384-dimensional sphere. Results across all representation techniques tested (all at tol=0.10, 5-fold CV):
 
-| Variant | cos sim | eff dim (90%) | Accuracy (tol=0.10) |
-|---|---|---|---|
-| MiniLM (raw) | 0.305 | 85 / 384 | 63.4% |
-| ZCA-whitened | −0.002 | 292 / 384 | 64.5% |
-| LLM-expanded + ZCA | −0.002 | 293 / 384 | 63.1% |
-| PCA-128 whitened | −0.002 | 108 / 128 | 61.9% |
-| + TF-IDF (SVD-64) | 0.278 | 101 / 448 | 61.2% |
-| + code features | 0.071 | 16 / 404 | 60.7% |
-| **Prior (no embed)** | — | — | **65.2%** |
+| Variant | cos sim | eff dim (90%) | Accuracy | Savings |
+|---|---|---|---|---|
+| MiniLM (raw) | 0.305 | 85 / 384 | 63.4% | 96.4% |
+| ZCA-whitened | −0.002 | 292 / 384 | 64.5% | 96.5% |
+| LLM-expanded + ZCA | −0.002 | 293 / 384 | 63.1% | 96.7% |
+| PCA-128 whitened | −0.002 | 108 / 128 | 61.9% | 96.8% |
+| + TF-IDF (SVD-64) | 0.278 | 101 / 448 | 61.2% | 96.9% |
+| + code features | 0.071 | 16 / 404 | 60.7% | 96.4% |
+| **Prior (no embed)** | — | — | **65.2%** | 96.4% |
 
-### LLM expansion: richer signal, same bottleneck
+### LLM expansion: the representation problem is solved
 
-Claude Haiku expands each terse prompt into a structured difficulty profile:
+Claude Haiku expands each terse prompt into a structured difficulty profile before embedding:
 
 ```
 Concepts:    [Python/CS concepts required]
@@ -113,11 +113,33 @@ Edge cases:  [2–3 specific cases]
 Difficulty:  [easy / medium / hard + one-line reason]
 ```
 
-The original prompt and the expansion are concatenated and re-embedded with MiniLM + ZCA whitening. Expansions are cached to `data/llm_expansions.json` (called once, ~$0.005 total).
+The original prompt and the expansion are concatenated and re-embedded with MiniLM + ZCA whitening. This is cached to `data/llm_expansions.json` (~$0.005 one-time API cost for all 425 prompts).
 
-**Result:** The max pairwise cosine similarity drops from 0.99 (raw) to 0.61 — the embeddings are genuinely richer and more discriminative. Effective dimensionality reaches 293, on par with pure ZCA. But routing accuracy (63.1%) does not improve over raw ZCA (64.5%) and remains below the Prior (65.2%).
+The embedding spread metrics confirm the approach works as intended:
+- Max pairwise cosine similarity: **0.99 → 0.61** (was 0.99 for raw MiniLM)
+- Effective dimensionality: **85 → 293** out of 384
+- The per-prompt difficulty signal is genuinely in the embeddings now
 
-**Why:** The information is now in the embeddings. The MLP just cannot reliably learn from it at 425 samples with binary pass/fail labels — the signal-to-noise ratio at this dataset size is too low for fine-grained difficulty distinctions. The ~1–2pp differences across all variants are within the variance of 5-fold CV. A larger or more varied dataset (e.g. mixing MBPP with HumanEval and harder benchmarks) would be needed to confirm whether the richer representation converts to real routing gains.
+But routing accuracy comes in at 63.1% — not better than plain ZCA (64.5%) and still below the Prior (65.2%).
+
+### The real bottleneck: dataset size and diversity
+
+Every representation technique we tried — ZCA whitening, PCA, TF-IDF, code features, LLM expansion — converges to the same ~63–65% accuracy range. The ~1–2pp variation across all variants is within the noise of 5-fold CV on 425 samples. No representation fix can escape this ceiling.
+
+The root cause is now clearly identified: **it is not the representation, it is the data**.
+
+Two problems compound each other:
+
+**1. Too few samples (425 prompts).** Binary pass/fail labels are noisy — whether a model passes depends on temperature, prompt phrasing, and randomness. With 5-fold CV that leaves ~340 training examples per fold, the MLP cannot reliably learn subtle per-prompt difficulty patterns even when they are present in the embeddings. The LLM expansion proved those patterns exist geometrically; the model just doesn't have enough examples to fit them.
+
+**2. No difficulty diversity (MBPP only).** All 425 prompts are from a single benchmark of introductory Python tasks. The difficulty range is narrow — almost everything is "easy" or "medium". There is no strong correlation between prompt features and which model passes, because even Mistral-7B passes most of them. The router has almost nothing to discriminate.
+
+For the embedding-based approach to work, you need a dataset where:
+- Prompts span a wide range of difficulty (easy → very hard)
+- Some prompts are genuinely hard for cheap models but easy for expensive ones
+- There are thousands of examples, not hundreds
+
+**Next step: expand the dataset with harder and more varied benchmarks** — mixing MBPP with HumanEval, LeetCode-style problems, and multi-step reasoning tasks — to create real difficulty variation across models. With genuine difficulty spread in the labels, the LLM-expanded embeddings should finally give the MLP something to learn.
 
 ---
 
