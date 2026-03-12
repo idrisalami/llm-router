@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Compare spread metrics across MiniLM + all enhancement variants.")
     parser.add_argument("--compare-routing", action="store_true",
                         help="Run CV routing evaluation for each embedding variant at tol=0.10.")
+    parser.add_argument("--llm-expand", action="store_true",
+                        help="Include LLM-expansion variant in --compare-embeddings / --compare-routing.")
+    parser.add_argument("--recompute-expansions", action="store_true",
+                        help="Force re-generation of LLM prompt expansions (ignores cache).")
 
     args = parser.parse_args(argv)
 
@@ -101,7 +105,11 @@ def main(argv: list[str] | None = None) -> int:
         from analysis.embedding_analysis import compare_spread, compute_spread_metrics, print_metrics
 
         print("[embed] Building embedding variants…")
-        variants = build_all_variants(embeddings, prompts)
+        variants = build_all_variants(
+            embeddings, prompts,
+            include_llm=args.llm_expand,
+            recompute_expansions=args.recompute_expansions,
+        )
 
         print("\n[embed] Spread metrics per variant:")
         for name, emb in variants:
@@ -112,7 +120,11 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── --compare-routing ─────────────────────────────────────────────────────
     if args.compare_routing:
-        _run_routing_comparison(df, embeddings, prompts, args.cv, args.tolerance)
+        _run_routing_comparison(
+            df, embeddings, prompts, args.cv, args.tolerance,
+            include_llm=args.llm_expand,
+            recompute_expansions=args.recompute_expansions,
+        )
 
     # ── --compare ─────────────────────────────────────────────────────────────
     if args.compare:
@@ -333,7 +345,11 @@ def _plot_cost_accuracy(
     print(f"[compare] Plot saved → {out_path}")
 
 
-def _run_routing_comparison(df, embeddings, prompts, cv: int, tolerance: float) -> None:
+def _run_routing_comparison(
+    df, embeddings, prompts, cv: int, tolerance: float,
+    include_llm: bool = False,
+    recompute_expansions: bool = False,
+) -> None:
     """CV routing accuracy + cost for each embedding variant at a fixed tolerance."""
     import pandas as pd
     from pathlib import Path
@@ -368,7 +384,7 @@ def _run_routing_comparison(df, embeddings, prompts, cv: int, tolerance: float) 
     rows.append({"variant": "Prior (no embedding)", "accuracy": acc, "avg_cost": cost,
                  "savings_%": sav, "mean_cos_sim": None, "eff_dim_90": None})
 
-    variants = build_all_variants(embeddings, prompts)
+    variants = build_all_variants(embeddings, prompts, include_llm=include_llm)
     for name, emb in variants:
         spread = compute_spread_metrics(emb)
         cv_res = evaluate_mlp_router_cv(df, emb, prompts, cv=cv, score_tolerance=tolerance)

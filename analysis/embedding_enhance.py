@@ -188,15 +188,47 @@ def augment_tfidf(
 # Convenience: build all variants at once
 # ──────────────────────────────────────────────────────────────────────────────
 
+def augment_llm_expansion(
+    prompts: list[str],
+    force_recompute: bool = False,
+) -> np.ndarray:
+    """Embed original-prompt + LLM expansion with MiniLM, then ZCA-whiten.
+
+    The expansion (structured difficulty profile from Claude Haiku) adds
+    per-prompt signal about algorithm type, complexity, and edge cases that
+    the terse original prompt lacks.  ZCA whitening is applied on top to
+    maximise geometric spread.
+    """
+    from analysis.llm_expander import load_or_expand
+    from router.features import _embed_minilm
+
+    expanded = load_or_expand(prompts, force_recompute=force_recompute)
+    raw_emb = _embed_minilm(expanded)
+    return whiten_zca(raw_emb)
+
+
 def build_all_variants(
     embeddings: np.ndarray,
     prompts: list[str],
+    include_llm: bool = False,
+    recompute_expansions: bool = False,
 ) -> list[tuple[str, np.ndarray]]:
-    """Return [(name, embeddings)] for MiniLM + all enhancement variants."""
-    return [
+    """Return [(name, embeddings)] for MiniLM + all enhancement variants.
+
+    include_llm=False by default because it requires the Anthropic API and
+    cached expansions.  Pass include_llm=True (or --llm-expand CLI flag)
+    to include the LLM-expansion variant.
+    """
+    variants = [
         ("MiniLM (raw)",        normalize(embeddings, norm="l2")),
         ("ZCA-whitened",        whiten_zca(embeddings)),
         ("PCA-128 whitened",    whiten_pca(embeddings, n_components=128)),
         ("+ code features",     augment_code(embeddings, prompts)),
         ("+ TF-IDF (SVD-64)",   augment_tfidf(embeddings, prompts)),
     ]
+    if include_llm:
+        variants.append((
+            "LLM-expanded + ZCA",
+            augment_llm_expansion(prompts, force_recompute=recompute_expansions),
+        ))
+    return variants

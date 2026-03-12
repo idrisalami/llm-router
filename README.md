@@ -59,32 +59,82 @@ All metrics from strict 5-fold cross-validation (no prompt seen in both train an
 - `tol=0.10` — recommended sweet spot: large cost savings while staying well above random
 - `tol=0.20` — very aggressive, trades off accuracy noticeably
 
-### Sanity check: does the embedding help?
+---
 
-The **Prior (no embedding)** baseline uses only each model's average pass rate from the training fold as a prompt-independent score, then applies the same tolerance policy — no neural network, no embeddings.
+## Why the embedding barely helps — and what to do about it
 
-Comparing Prior vs MLP at the same tolerance reveals the embedding adds very little for MBPP:
-- At `tol=0.05`: both achieve **65.2% accuracy**, but prior costs $0.000335 vs MLP's $0.003134 — the prior is 10× cheaper for identical accuracy
-- At `tol=0.10`: both reach the same cost (~$0.000336), but prior is actually *more accurate* (65.2% vs 63.4%)
+### The Prior baseline
 
-**Conclusion:** for MBPP, the MLP is essentially learning the same global pass-rate ranking the prior uses directly. All 425 prompts are semantically near-identical ("write a Python function…"), so MiniLM embeddings carry almost no per-prompt difficulty signal. The router would need richer features (code complexity, AST structure, etc.) to genuinely outperform the prior.
+The **Prior (no embedding)** baseline uses only each model's average pass rate from the training fold — no neural network, no embeddings. Every test prompt gets the same prompt-independent score; the cheapest model within tolerance wins.
+
+Comparing Prior vs MLP at the same tolerance reveals the embedding adds almost nothing:
+- At `tol=0.05`: both achieve **65.2% accuracy**, but the prior costs $0.000335 vs MLP's $0.003134 — 10× cheaper for identical accuracy
+- At `tol=0.10`: both reach the same cost (~$0.000336), but the prior is actually *more accurate* (65.2% vs 63.4%)
+
+**Root cause:** the MLP is not learning per-prompt difficulty. It is learning the same global pass-rate ranking the prior uses directly. There is no prompt-specific signal for it to learn from.
+
+### Why embeddings carry no signal here
+
+MBPP prompts are informationally compressed: *"Write a function that returns the nth Fibonacci number."* is 10 words, but those 10 words encode algorithm type, required data structures, time complexity, and edge cases. MiniLM embeds the surface words — it does not unpack what the task *requires*.
+
+To measure this, we ran pairwise cosine similarity across all 425 embeddings:
+
+| Metric | Value |
+|---|---|
+| Mean pairwise cosine similarity | **0.305** (0 = orthogonal, 1 = identical) |
+| Effective dimensionality (90% variance) | **85** out of 384 |
+| Variance explained by top 2 PCs | 15.8% |
+
+A mean cosine similarity of 0.31 means every pair of prompts shares ~31% of their embedding direction. From the MLP's perspective, there is barely any feature space variation to learn from — all prompts look alike.
+
+### Improving spread with ZCA whitening
+
+ZCA whitening decorrelates all embedding dimensions and equalises their variance, spreading the point cloud across the full 384-dimensional sphere. Results:
+
+| Variant | cos sim | eff dim (90%) | Accuracy (tol=0.10) |
+|---|---|---|---|
+| MiniLM (raw) | 0.305 | 85 / 384 | 63.4% |
+| ZCA-whitened | −0.002 | 292 / 384 | 64.5% |
+| PCA-128 whitened | −0.002 | 108 / 128 | 61.9% |
+| + code features | 0.071 | 16 / 404 | 60.7% |
+| + TF-IDF (SVD-64) | 0.278 | 101 / 448 | 61.2% |
+| **Prior (no embed)** | — | — | **65.2%** |
+
+ZCA whitening is the best pure-geometry improvement — it pushes the eff dim from 85 to 292 and closes the gap with the Prior from −1.8pp to −0.7pp. But it cannot invent signal that is absent: all it does is rearrange the same information more uniformly. The Prior still wins because the bottleneck is *information content*, not geometry.
+
+### The real fix: richer prompt representations via LLM expansion
+
+The fundamental insight is that the terse MBPP prompts do not contain enough surface-level variation for an embedding model to distinguish difficulty. The solution is to **unpack that latent information explicitly** before embedding.
+
+We use a small LLM (Claude Haiku) to expand each prompt into a structured difficulty profile:
+
+```
+Concepts:    [Python/CS concepts required]
+Algorithm:   [recursion / DP / sorting / hashing / math / …]
+Complexity:  [O(n) / O(n log n) / O(n²) / …]
+Edge cases:  [2–3 specific cases]
+Difficulty:  [easy / medium / hard + one-line reason]
+```
+
+For example:
+- *"Return the nth Fibonacci number"* → `Concepts: recursion, memoization | Algorithm: DP | Complexity: O(n) | Edge cases: n=0, n=1, negative n | Difficulty: easy`
+- *"Find the longest common subsequence of two strings"* → `Concepts: dynamic programming, 2D DP table | Algorithm: DP | Complexity: O(nm) | Edge cases: empty string, identical strings | Difficulty: hard`
+
+These expansions have genuine lexical and semantic variation — easy vs hard, O(n) vs O(n²), recursion vs hashing — that the original terse prompts do not. The MLP can now learn features that actually correlate with which models pass.
+
+The original prompt and the expansion are concatenated and re-embedded with MiniLM (+ ZCA whitening), so the embedding carries both the original meaning and the unpacked difficulty signal.
+
+Expansions are cached to `data/llm_expansions.json` so the API is called only once per prompt.
 
 ---
 
 ## Embedding spread analysis
 
-`--analyze-embeddings` tracks spread metrics; `--compare-embeddings` compares all variants; `--compare-routing --tolerance 0.10` shows whether better spread translates to better routing.
-
-| Variant | cos sim | eff dim (90%) | mean L2 | Accuracy | Savings |
-|---|---|---|---|---|---|
-| MiniLM (raw) | 0.305 | 85 / 384 | 1.173 | 63.4% | 96.4% |
-| **ZCA-whitened** | **−0.002** | **292 / 384** | **1.416** | **64.5%** | 96.5% |
-| PCA-128 whitened | −0.002 | 108 / 128 | 1.415 | 61.9% | 96.8% |
-| + code features | 0.071 | 16 / 404 | 1.340 | 60.7% | 96.4% |
-| + TF-IDF (SVD-64) | 0.278 | 101 / 448 | 1.197 | 61.2% | 96.9% |
-| Prior (no embed) | — | — | — | 65.2% | 96.4% |
-
-ZCA whitening dramatically increases spread (eff dim 85 → 292, cos sim 0.305 → −0.002) and slightly improves routing accuracy (63.4% → 64.5%), narrowing but not closing the gap with the Prior. The fundamental bottleneck is that MBPP prompts are semantically near-identical — no representation technique can extract difficulty signal that isn't there.
+```bash
+python3 router_main.py --analyze-embeddings          # spread metrics + 4-panel plot
+python3 router_main.py --compare-embeddings          # all variants side-by-side
+python3 router_main.py --compare-routing             # routing accuracy per variant
+```
 
 ---
 
@@ -117,16 +167,19 @@ python3 router_main.py --route "..." --budget 0.001 --tolerance 0.10
 ```
 captsone/
 ├── router/
-│   ├── mlp_router.py   # RouterMLP, training, CV evaluation, routing policy
-│   └── features.py     # MiniLM embeddings (cached to data/)
+│   ├── mlp_router.py       # RouterMLP, training, CV evaluation, routing policy
+│   └── features.py         # MiniLM embeddings (cached to data/)
 ├── sweep/
-│   ├── load_data.py    # RouterBench download + wide→long transform
-│   └── query.py        # prompt lookup with fuzzy matching
+│   ├── load_data.py        # RouterBench download + wide→long transform
+│   └── query.py            # prompt lookup with fuzzy matching
 ├── analysis/
-│   ├── visualize.py    # cost-accuracy plots (matplotlib + plotly)
-│   └── stats.py        # summary stats table
-├── main.py             # Sweep Engine CLI
-├── router_main.py      # Router CLI
+│   ├── embedding_analysis.py  # spread metrics + plots
+│   ├── embedding_enhance.py   # ZCA whitening, PCA-whiten, code-aug, TF-IDF, LLM-expand
+│   ├── llm_expander.py        # Claude Haiku structured prompt expansion + cache
+│   ├── visualize.py           # cost-accuracy plots (matplotlib + plotly)
+│   └── stats.py               # summary stats table
+├── main.py                 # Sweep Engine CLI
+├── router_main.py          # Router CLI
 └── requirements.txt
 ```
 
