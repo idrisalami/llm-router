@@ -1,4 +1,4 @@
-# LLM Router — Capstone Project
+# LLM Router
 
 Routes coding prompts to the cheapest LLM that will pass, using a joint multi-output MLP trained on prompt embeddings.
 
@@ -34,28 +34,40 @@ Routing policy: pick model with highest P(pass)
 
 ## Results
 
-| Strategy | Accuracy | Avg cost | Savings vs GPT-4 |
-|---|---|---|---|
-| always-best (GPT-4) | 68.6% | $0.009377 | 0.0% |
-| always-cheapest (Mistral-7B) | 34.2% | $0.000049 | 99.5% |
-| random | 51.8% | $0.001999 | 78.7% |
-| oracle (theoretical ceiling) | 86.6% | $0.000413 | 95.6% |
-| **MLP tol=0.00** | **69.1%** | $0.009149 | 2.4% |
-| **MLP tol=0.05** | **65.2%** | $0.003134 | 66.6% |
-| **MLP tol=0.10** ✓ | **63.4%** | **$0.000336** | **96.4%** |
-| MLP tol=0.20 | 55.9% | $0.000187 | 98.0% |
+All metrics from strict 5-fold cross-validation (no prompt seen in both train and test).
 
-**`tol=0.10` is the recommended operating point.** It strictly dominates the previous LR baseline on both accuracy (63.4% vs 54.1%) and cost savings (96.4% vs 90.0%), and approaches the oracle's 95.6% savings while staying 29pp above random.
+| Strategy | tol | Accuracy | Avg cost | Savings vs GPT-4 |
+|---|---|---|---|---|
+| always-best (GPT-4) | — | 68.6% | $0.009377 | 0.0% |
+| always-cheapest (Mistral-7B) | — | 34.2% | $0.000049 | 99.5% |
+| random | — | 51.8% | $0.001999 | 78.7% |
+| oracle (theoretical ceiling) | — | 86.6% | $0.000413 | 95.6% |
+| Prior (no embedding) | 0.00 | 68.6% | $0.009377 | 0.0% |
+| Prior (no embedding) | 0.05 | 65.2% | $0.000335 | 96.4% |
+| Prior (no embedding) | 0.10 | 65.2% | $0.000335 | 96.4% |
+| Prior (no embedding) | 0.20 | 51.5% | $0.000156 | 98.3% |
+| MLP | 0.00 | **69.1%** | $0.009149 | 2.4% |
+| MLP | 0.05 | 65.2% | $0.003134 | 66.6% |
+| **MLP** | **0.10** | 63.4% | $0.000336 | **96.4%** |
+| MLP | 0.20 | 55.9% | $0.000187 | 98.0% |
 
 ### The tolerance parameter
 
-`score_tolerance` controls the width of the "near-tied" band. Models within `tol` of the best predicted probability are all eligible — the cheapest wins.
+`score_tolerance` widens the selection band: all models within `tol` of the best predicted P(pass) are eligible — the cheapest wins.
 
-- `tol=0.00` — always pick the single highest-confidence model → near-GPT-4 quality but routes almost entirely to GPT-4 (2.4% savings)
-- `tol=0.10` — widen the band so cheaper models can win when the MLP is nearly as confident in them → **recommended sweet spot**
-- `tol=0.20` — very aggressive cost-cutting, trades off accuracy noticeably
+- `tol=0.00` — always pick the single highest-confidence model → routes almost entirely to GPT-4
+- `tol=0.10` — recommended sweet spot: large cost savings while staying well above random
+- `tol=0.20` — very aggressive, trades off accuracy noticeably
 
-The MLP responds well to tolerance tuning because it has genuinely learned cross-model signal: at `tol=0.10` it can tell "GPT-3.5 is nearly as likely to pass as GPT-4 on this prompt" and route there instead.
+### Sanity check: does the embedding help?
+
+The **Prior (no embedding)** baseline uses only each model's average pass rate from the training fold as a prompt-independent score, then applies the same tolerance policy — no neural network, no embeddings.
+
+Comparing Prior vs MLP at the same tolerance reveals the embedding adds very little for MBPP:
+- At `tol=0.05`: both achieve **65.2% accuracy**, but prior costs $0.000335 vs MLP's $0.003134 — the prior is 10× cheaper for identical accuracy
+- At `tol=0.10`: both reach the same cost (~$0.000336), but prior is actually *more accurate* (65.2% vs 63.4%)
+
+**Conclusion:** for MBPP, the MLP is essentially learning the same global pass-rate ranking the prior uses directly. All 425 prompts are semantically near-identical ("write a Python function…"), so MiniLM embeddings carry almost no per-prompt difficulty signal. The router would need richer features (code complexity, AST structure, etc.) to genuinely outperform the prior.
 
 ---
 
