@@ -13,6 +13,9 @@ Usage
 
     # Tolerance sweep: compare MLP across tolerance values vs baselines
     python3 router_main.py --compare
+
+    # Analyse embedding spread (re-run after each representation change)
+    python3 router_main.py --analyze-embeddings
 """
 
 import argparse
@@ -40,12 +43,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="Force re-computation of prompt embeddings.")
     parser.add_argument("--cv", type=int, default=5,
                         help="Number of cross-validation folds (default: 5).")
+    parser.add_argument("--analyze-embeddings", action="store_true",
+                        help="Plot embedding spread metrics (re-run after each representation change).")
 
     args = parser.parse_args(argv)
 
-    if not args.train and not args.route and not args.compare:
+    if not args.train and not args.route and not args.compare and not args.analyze_embeddings:
         parser.print_help()
-        print("\n[error] Provide --train, --route, or --compare.", file=sys.stderr)
+        print("\n[error] Provide --train, --route, --compare, or --analyze-embeddings.", file=sys.stderr)
         return 1
 
     from sweep.load_data import load_coding_data
@@ -72,6 +77,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[router] Training MLP on {X.shape[0]} prompts × {X.shape[1]} features, {len(model_names)} models…")
         mlp = train_mlp(X, Y)
         save_mlp(mlp, model_costs, model_names)
+
+    # ── --analyze-embeddings ──────────────────────────────────────────────────
+    if args.analyze_embeddings:
+        from analysis.embedding_analysis import (
+            compute_spread_metrics, print_metrics, plot_embedding_spread,
+        )
+        metrics = compute_spread_metrics(embeddings)
+        print_metrics(metrics, label="MiniLM (all-MiniLM-L6-v2, 384-dim)")
+        plot_embedding_spread(embeddings, label="MiniLM", metrics=metrics)
 
     # ── --compare ─────────────────────────────────────────────────────────────
     if args.compare:

@@ -1,0 +1,17 @@
+model,tolerance,accuracy,avg_cost,savings_%
+always-best,—,0.6859,0.009377,0.0
+always-cheapest,—,0.3424,4.9e-05,99.5
+random,—,0.5176,0.001999,78.7
+oracle,—,0.8659,0.000413,95.6
+Prior (no embedding),0.0,0.6859,0.009377,0.0
+Prior (no embedding),0.02,0.6859,0.009377,0.0
+Prior (no embedding),0.05,0.6518,0.000335,96.4
+Prior (no embedding),0.1,0.6518,0.000335,96.4
+Prior (no embedding),0.15,0.5647,0.000238,97.5
+Prior (no embedding),0.2,0.5153,0.000156,98.3
+Joint MLP,0.0,0.6906,0.009149,2.4
+Joint MLP,0.02,0.6776,0.006868,26.8
+Joint MLP,0.05,0.6518,0.003134,66.6
+Joint MLP,0.1,0.6341,0.000336,96.4
+Joint MLP,0.15,0.5894,0.000229,97.6
+Joint MLP,0.2,0.5588,0.000187,98.0

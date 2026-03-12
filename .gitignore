@@ -6,6 +6,7 @@ data/*.pkl
 data/*.npy
 data/*.parquet
 data/*.txt
+data/router_models/
 
 # Generated plots (large PNGs / HTML)
 output/**/*.png
