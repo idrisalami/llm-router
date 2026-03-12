@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
 def _run_tolerance_sweep(df, embeddings, prompts, cv: int) -> None:
     import pandas as pd
     from pathlib import Path
-    from router.mlp_router import build_training_matrix, compute_baselines, evaluate_mlp_router_cv
+    from router.mlp_router import build_training_matrix, compute_baselines, evaluate_mlp_router_cv, evaluate_prior_router_cv
 
     OUTPUT_DIR = Path("output/router")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -133,6 +133,17 @@ def _run_tolerance_sweep(df, embeddings, prompts, cv: int) -> None:
         rows.append({"model": name, "tolerance": "—",
                      "accuracy": round(stats["accuracy"], 4),
                      "avg_cost": round(stats["avg_cost"], 6),
+                     "savings_%": round(sav, 1)})
+
+    print("[compare] Running no-embedding baseline (prior) across tolerance values…")
+    for tol in TOLERANCES:
+        cv_res = evaluate_prior_router_cv(df, embeddings, prompts, cv=cv, score_tolerance=tol)
+        acc  = cv_res["actual_quality"].mean()
+        cost = cv_res["actual_cost"].mean()
+        sav  = (1 - cost / best_cost) * 100
+        print(f"  prior tol={tol:.2f}  acc={acc:.4f}  cost=${cost:.6f}  savings={sav:.1f}%")
+        rows.append({"model": "Prior (no embedding)", "tolerance": tol,
+                     "accuracy": round(acc, 4), "avg_cost": round(cost, 6),
                      "savings_%": round(sav, 1)})
 
     print("[compare] Running MLP tolerance sweep…")
@@ -224,6 +235,18 @@ def _plot_cost_accuracy(
         ax.scatter(stats["avg_cost"], stats["accuracy"],
                    color=color, s=160, zorder=4,
                    edgecolors="black", linewidth=0.8, label=label)
+
+    # ── Prior (no-embedding) baseline across tolerances ───────────────────────
+    prior_rows = results_df[results_df["model"] == "Prior (no embedding)"].copy()
+    prior_rows = prior_rows.sort_values("avg_cost")
+    ax.plot(prior_rows["avg_cost"].values, prior_rows["accuracy"].values,
+            color="#888888", linewidth=1.2, linestyle=":", alpha=0.6, zorder=3)
+    for _, row in prior_rows.iterrows():
+        ax.scatter(row["avg_cost"], row["accuracy"],
+                   color="#AAAAAA", s=120, marker="D", zorder=4,
+                   edgecolors="#555555", linewidth=0.7)
+    ax.scatter([], [], color="#AAAAAA", s=120, marker="D",
+               edgecolors="#555555", linewidth=0.7, label="Prior/no-embed (↑tol → cheaper)")
 
     # ── MLP router across tolerances (connected trade-off curve) ──────────────
     mlp_rows = results_df[results_df["model"] == "Joint MLP"].copy()

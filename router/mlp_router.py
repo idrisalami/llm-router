@@ -280,3 +280,44 @@ def evaluate_mlp_router_cv(
 
     print()
     return pd.DataFrame(rows)
+
+
+def evaluate_prior_router_cv(
+    df: pd.DataFrame,
+    embeddings: np.ndarray,
+    prompts: list[str],
+    cv: int = 5,
+    budget: float | None = None,
+    score_tolerance: float = 0.0,
+) -> pd.DataFrame:
+    """No-embedding baseline: scores = per-model average pass rate on training fold.
+
+    The same prompt-independent score is applied to every test prompt.
+    This isolates whether the MLP's prompt embeddings add value beyond
+    simply knowing each model's global pass rate.
+
+    Difference from 'random': random picks a uniformly random model per prompt
+    (ignores model quality entirely). This baseline knows model quality but
+    ignores the specific prompt.
+    """
+    X, y_dict, model_costs, ordered_prompts = build_training_matrix(df, embeddings, prompts)
+    model_names = list(y_dict.keys())
+
+    kf = KFold(n_splits=cv, shuffle=True, random_state=42)
+    rows = []
+
+    for fold_idx, (train_idx, test_idx) in enumerate(kf.split(X)):
+        # Scores = average pass rate on the training fold (prompt-independent)
+        train_pass_rates = {m: float(y_dict[m][train_idx].mean()) for m in model_names}
+
+        for j in test_idx:
+            routed = select_model(train_pass_rates, model_costs, budget, score_tolerance)
+            rows.append({
+                "prompt":         ordered_prompts[j],
+                "fold":           fold_idx,
+                "routed_model":   routed,
+                "actual_quality": float(y_dict[routed][j]),
+                "actual_cost":    model_costs[routed],
+            })
+
+    return pd.DataFrame(rows)
